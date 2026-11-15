@@ -42,6 +42,7 @@ A avaliação 360º guarda notas de 1 a 5 em seis critérios, comentários e evo
 - **Alinhamento:** atalho para as regras oficiais da cidade e espaço para regras internas da Staff.
 - **Dashboard, relatórios e rankings:** indicadores limitados pelas permissões configuradas para cada cargo.
 - **Logs e auditoria:** registra operações administrativas; usuários comuns não podem editar ou apagar os registros.
+- **Manutenção:** o Desenvolvedor confere o armazenamento ativo e as quantidades de logins e recrutamentos sem expor os dados pessoais.
 - **Personalização:** tema, cores e fonte salvos por conta.
 
 ## Render e persistência

@@ -106,7 +106,7 @@ const server = http.createServer(async (req, res) => {
       const canPermission=key=>effectivePermissions[key]===true;
       const canAccessCandidate=item=>canPermission('candidates.view_all')||canPermission('training.manage')||canPermission('evaluations.manage')||canPermission('offboarding.manage')||canPermission('candidates.decide')||canPermission('candidates.view_today')&&item.createdAt.slice(0,10)===new Date().toISOString().slice(0,10)||canPermission('candidates.view_own')&&item.creatorId===account.id;
       const route=url.pathname,method=req.method;let requiredPermission=null;
-      if(route==='/api/users')requiredPermission='users.manage';else if(/^\/api\/users\/[^/]+\/(role|password)$/.test(route))requiredPermission='users.manage';else if(/^\/api\/users\/[^/]+$/.test(route)&&method==='DELETE')requiredPermission='users.manage';
+      if(route==='/api/users')requiredPermission='users.manage';else if(/^\/api\/users\/[^/]+\/(role|password)$/.test(route))requiredPermission='users.manage';else if(/^\/api\/users\/[^/]+$/.test(route)&&method==='DELETE')requiredPermission='users.manage';else if(route==='/api/storage-status')requiredPermission='maintenance.view';
       else if(route==='/api/staff')requiredPermission='training.manage';
       else if(route==='/api/staff-commands')requiredPermission=method==='GET'?'staff_commands.view':'staff_commands.manage';else if(/^\/api\/staff-commands\/[^/]+$/.test(route))requiredPermission='staff_commands.manage';
       else if(route==='/api/internal-rules')requiredPermission=method==='GET'?'page.alignment':'alignment.manage_rules';else if(/^\/api\/internal-rules\/[^/]+$/.test(route))requiredPermission='alignment.manage_rules';
@@ -117,6 +117,10 @@ const server = http.createServer(async (req, res) => {
       if(requiredPermission&&!canPermission(requiredPermission))return json(res,403,{error:'Seu cargo não tem permissão para esta ação.'});
       if(req.method==='GET'&&url.pathname==='/api/permissions'){
         const stored=permissionConfig&&typeof permissionConfig==='object'&&!Array.isArray(permissionConfig)?permissionConfig:{};const roles=Object.fromEntries(Object.keys(defaultPermissions).map(role=>[role,{...defaultPermissions[role],...(stored[role]||{})}])),canManage=account.role==='desenvolvedor'&&canPermission('permissions.manage');return json(res,200,{role:account.role,permissions:effectivePermissions,definitions:permissionDefinitions,roles:canManage?roles:null,canManage});
+      }
+      if(req.method==='GET'&&url.pathname==='/api/storage-status'){
+        const counts={};for(const key of Object.keys(defaults)){const value=await readCollection(key);counts[key]=Array.isArray(value)?value.length:value&&typeof value==='object'?Object.keys(value).length:0;}
+        return json(res,200,{storage:pool?'postgres':'local',databaseConnected:pool?true:false,counts});
       }
       if(req.method==='PUT'&&url.pathname==='/api/permissions'){
         if(account.role!=='desenvolvedor'||!canPermission('permissions.manage'))return json(res,403,{error:'Somente Desenvolvedor pode alterar as permissões dos cargos.'});const input=await body(req);if(!input.roles||typeof input.roles!=='object')return json(res,400,{error:'Envie as permissões de cada cargo.'});const next={};for(const role of Object.keys(defaultPermissions)){const values=input.roles[role];if(!values||permissionDefinitions.some(p=>typeof values[p.key]!=='boolean'))return json(res,400,{error:`Confira todas as permissões do cargo ${role}.`});next[role]={};for(const p of permissionDefinitions)next[role][p.key]=values[p.key];}next.desenvolvedor['permissions.manage']=true;next.desenvolvedor['page.permissions']=true;next.desenvolvedor['users.manage']=true;next.desenvolvedor['page.users']=true;await saveData('permissions',next);await audit(account,'Permissões dos cargos alteradas',{roles:Object.keys(next)});return json(res,200,{roles:next});
