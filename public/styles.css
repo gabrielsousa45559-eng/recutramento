@@ -29,3 +29,11 @@ body{font-family:var(--font-body,'DM Sans',sans-serif);background:radial-gradien
 .table th,.field label,.navlabel{color:color-mix(in srgb,var(--text) 62%,var(--muted))}
 .field input,.field select,.field textarea,.table select{color:var(--text)}
 .badge,.role{border-color:color-mix(in srgb,var(--accent) 35%,var(--line));}
+.app{position:relative;isolation:isolate;background:transparent}
+body:has(.app)::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(circle at 25% 13%,color-mix(in srgb,var(--accent) 55%,transparent) 0 1px,transparent 2px),radial-gradient(circle at 54% 31%,color-mix(in srgb,var(--accent) 65%,transparent) 0 1.5px,transparent 2.5px),radial-gradient(circle at 82% 18%,color-mix(in srgb,var(--text) 45%,transparent) 0 1px,transparent 2px),radial-gradient(circle at 71% 73%,color-mix(in srgb,var(--accent) 50%,transparent) 0 1px,transparent 2px),radial-gradient(ellipse at 48% 0%,color-mix(in srgb,var(--accent) 13%,transparent),transparent 56%)}
+.side{backdrop-filter:blur(18px);border-right-color:color-mix(in srgb,var(--accent) 17%,var(--line))}
+.card{box-shadow:0 12px 36px color-mix(in srgb,var(--bg) 60%,transparent);backdrop-filter:blur(12px);transition:border-color .2s,transform .2s,box-shadow .2s}
+.card:hover{border-color:color-mix(in srgb,var(--accent) 25%,var(--line));box-shadow:0 16px 42px color-mix(in srgb,var(--bg) 45%,transparent)}
+.navitem.active{box-shadow:inset 2px 0 var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--panel2))}
+.btn.primary{box-shadow:0 6px 20px color-mix(in srgb,var(--accent) 22%,transparent)}
+.theme-card{overflow:hidden}.theme-card h2{font-size:20px}.color-field input[type=color]{width:100%;max-width:180px;height:48px;border-radius:12px;padding:5px;cursor:pointer}.theme-preview{min-height:105px;padding:18px;border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:14px;background:linear-gradient(130deg,color-mix(in srgb,var(--panel) 88%,var(--accent)),var(--panel));display:flex;flex-direction:column;justify-content:center;gap:6px}.theme-preview strong{font:700 18px var(--font-heading,'Manrope',sans-serif);color:var(--text)}.theme-preview span,.theme-preview small{color:color-mix(in srgb,var(--text) 72%,var(--muted));font-size:12px}
