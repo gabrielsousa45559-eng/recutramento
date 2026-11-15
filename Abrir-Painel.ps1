@@ -23,6 +23,13 @@ $publish = New-Button '↑  Publicar no GitHub' 245 ([Drawing.Color]::FromArgb(4
 $start.Add_Click({
   $node=Get-Command node -ErrorAction SilentlyContinue
   if(-not $node){[Windows.Forms.MessageBox]::Show('Instale o Node.js 20 ou superior para iniciar.','Node.js necessário')|Out-Null;return}
+  if(-not (Test-Path (Join-Path $root 'node_modules\pg\package.json'))){
+    $npm=Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if(-not $npm){[Windows.Forms.MessageBox]::Show('O npm não foi encontrado. Reinstale o Node.js 20 ou superior.','npm necessário')|Out-Null;return}
+    $status.Text='Instalando os componentes do painel...';$form.Refresh();Push-Location $root
+    try { & $npm.Source ci --no-audit --no-fund; $installExit=$LASTEXITCODE } finally { Pop-Location }
+    if($installExit -ne 0){$status.Text='Não foi possível instalar os componentes.';[Windows.Forms.MessageBox]::Show('A instalação falhou. Confira sua conexão e tente novamente.','Falha na instalação')|Out-Null;return}
+  }
   if(-not $script:server -or $script:server.HasExited){$script:server=Start-Process -FilePath $node.Source -ArgumentList 'server.mjs' -WorkingDirectory $root -PassThru -WindowStyle Hidden; Start-Sleep -Milliseconds 900}
   Start-Process 'http://localhost:4173'
   $status.Text='Painel aberto em http://localhost:4173'

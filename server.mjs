@@ -4,6 +4,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import pg from 'pg';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(root, 'data');
@@ -11,13 +12,35 @@ const usersFile = path.join(dataDir, 'users.json');
 const dataFiles = { recruitments:'recruitments.json', goals:'goals.json', events:'events.json', settings:'settings.json', blacklist:'blacklist.json', audit:'audit.json', commands:'staff-commands.json', rules:'internal-rules.json', permissions:'permissions.json' };
 const sessions = new Map();
 const mime = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.svg':'image/svg+xml' };
-await mkdir(dataDir, { recursive: true });
-if (!existsSync(usersFile)) await writeFile(usersFile, '[]', { flag: 'wx' });
-for (const [name, file] of Object.entries(dataFiles)) if (!existsSync(path.join(dataDir, file))) await writeFile(path.join(dataDir, file), ['settings','permissions'].includes(name) ? '{}' : '[]', { flag:'wx' });
-const readUsers = async () => JSON.parse(await readFile(usersFile, 'utf8'));
-const saveUsers = async users => writeFile(usersFile, JSON.stringify(users, null, 2));
-const readData = async name => JSON.parse(await readFile(path.join(dataDir, dataFiles[name]), 'utf8'));
-const saveData = async (name, data) => writeFile(path.join(dataDir, dataFiles[name]), JSON.stringify(data, null, 2));
+const { Pool } = pg;
+const pool = process.env.DATABASE_URL ? new Pool({ connectionString:process.env.DATABASE_URL, max:8, connectionTimeoutMillis:10000, idleTimeoutMillis:30000 }) : null;
+const defaults = { users:[], ...Object.fromEntries(Object.keys(dataFiles).map(name=>[name,['settings','permissions'].includes(name)?{}:[]])) };
+if (pool) {
+  await pool.query('CREATE TABLE IF NOT EXISTS app_data (key text PRIMARY KEY, value jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())');
+  await pool.query('CREATE TABLE IF NOT EXISTS app_sessions (session_id text PRIMARY KEY, user_id text NOT NULL, expires_at timestamptz NOT NULL)');
+  await pool.query('CREATE INDEX IF NOT EXISTS app_sessions_expires_at_idx ON app_sessions (expires_at)');
+  for (const [key, fallback] of Object.entries(defaults)) {
+    const localFile=key==='users'?usersFile:path.join(dataDir,dataFiles[key]);
+    let initial=fallback;
+    if (existsSync(localFile)) initial=JSON.parse(await readFile(localFile,'utf8'));
+    await pool.query('INSERT INTO app_data (key,value) VALUES ($1,$2::jsonb) ON CONFLICT (key) DO NOTHING',[key,JSON.stringify(initial)]);
+  }
+  await pool.query('DELETE FROM app_sessions WHERE expires_at <= now()');
+} else {
+  await mkdir(dataDir, { recursive: true });
+  if (!existsSync(usersFile)) await writeFile(usersFile, '[]', { flag: 'wx' });
+  for (const [name, file] of Object.entries(dataFiles)) if (!existsSync(path.join(dataDir, file))) await writeFile(path.join(dataDir, file), ['settings','permissions'].includes(name) ? '{}' : '[]', { flag:'wx' });
+}
+const readCollection = async key => { if(pool){const result=await pool.query('SELECT value FROM app_data WHERE key=$1',[key]);return result.rows[0]?.value??defaults[key]}const file=key==='users'?usersFile:path.join(dataDir,dataFiles[key]);return JSON.parse(await readFile(file,'utf8')); };
+const writeCollection = async (key, value) => { if(pool){await pool.query('INSERT INTO app_data (key,value,updated_at) VALUES ($1,$2::jsonb,now()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()',[key,JSON.stringify(value)]);return}const file=key==='users'?usersFile:path.join(dataDir,dataFiles[key]);return writeFile(file,JSON.stringify(value,null,2)); };
+const readUsers = () => readCollection('users');
+const saveUsers = users => writeCollection('users',users);
+const readData = name => readCollection(name);
+const saveData = (name, data) => writeCollection(name,data);
+const createSession = async (sessionId,userId) => { const expiresAt=new Date(Date.now()+8*60*60*1000);if(pool)await pool.query('INSERT INTO app_sessions (session_id,user_id,expires_at) VALUES ($1,$2,$3)',[sessionId,userId,expiresAt]);else sessions.set(sessionId,{userId,expiresAt:expiresAt.getTime()}); };
+const sessionUserId = async sessionId => { if(!sessionId)return null;if(pool){const result=await pool.query('SELECT user_id FROM app_sessions WHERE session_id=$1 AND expires_at>now()',[sessionId]);return result.rows[0]?.user_id??null}const session=sessions.get(sessionId);if(!session)return null;if(session.expiresAt<=Date.now()){sessions.delete(sessionId);return null}return session.userId; };
+const deleteSession = async sessionId => { if(pool)await pool.query('DELETE FROM app_sessions WHERE session_id=$1',[sessionId]);else sessions.delete(sessionId); };
+const deleteUserSessions = async userId => { if(pool)await pool.query('DELETE FROM app_sessions WHERE user_id=$1',[userId]);else for(const [sessionId,session] of sessions)if(session.userId===userId)sessions.delete(sessionId); };
 async function audit(actor, action, details={}) { const logs=await readData('audit'); logs.unshift({id:randomBytes(12).toString('hex'),actor:actor.name,actorId:actor.id,role:actor.role,action,details,timestamp:new Date().toISOString()}); await saveData('audit',logs); }
 const nameKey = name => (name || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
 const usernameFromName = name => nameKey(name).replace(/[^a-z0-9_.-]/g, '');
@@ -48,6 +71,7 @@ const clean = ({ id, name, username, role, createdAt }) => ({ id, name, username
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
+    if (req.method === 'GET' && url.pathname === '/health') { if(pool)await pool.query('SELECT 1');return json(res,200,{ok:true,storage:pool?'postgres':'local'}); }
     if (url.pathname.startsWith('/api/')) {
       const users = await readUsers();
       if (req.method === 'GET' && url.pathname === '/api/setup-status') return json(res, 200, { needsSetup: users.length === 0 });
@@ -69,11 +93,12 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && url.pathname === '/api/login') {
         const input = await body(req); const account = users.find(u => nameKey(u.name) === nameKey(input.name));
         if (!account || !verify(input.password || '', account)) return json(res, 401, { error: 'Usuário ou senha incorretos.' });
-        const sid = randomBytes(32).toString('hex'); sessions.set(sid, account.id);
-        return json(res, 200, { user: clean(account) }, { 'Set-Cookie':`sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800` });
+        const sid = randomBytes(32).toString('hex'); await createSession(sid, account.id);
+        const secure=process.env.NODE_ENV==='production'?'; Secure':'';
+        return json(res, 200, { user: clean(account) }, { 'Set-Cookie':`sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${secure}` });
       }
-      const sid = cookie(req); const account = users.find(u => u.id === sessions.get(sid));
-      if (req.method === 'POST' && url.pathname === '/api/logout') { sessions.delete(sid); return json(res, 200, { ok:true }, { 'Set-Cookie':'sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' }); }
+      const sid = cookie(req), sessionUser=await sessionUserId(sid), account = users.find(u => u.id === sessionUser);
+      if (req.method === 'POST' && url.pathname === '/api/logout') { await deleteSession(sid);const secure=process.env.NODE_ENV==='production'?'; Secure':'';return json(res, 200, { ok:true }, { 'Set-Cookie':`sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure}` }); }
       if (req.method === 'GET' && url.pathname === '/api/me') return account ? json(res, 200, { user:clean(account) }) : json(res, 401, { error:'Sessão encerrada.' });
       if (!account) return json(res, 401, { error:'Faça login para continuar.' });
       const permissionConfig=await readData('permissions');
@@ -144,7 +169,7 @@ const server = http.createServer(async (req, res) => {
       }
       const passwordMatch=url.pathname.match(/^\/api\/users\/([^/]+)\/password$/);
       if(req.method==='PATCH'&&passwordMatch){
-        if(account.role!=='desenvolvedor')return json(res,403,{error:'Somente Desenvolvedor pode redefinir senhas de outras contas.'});const target=users.find(u=>u.id===decodeURIComponent(passwordMatch[1]));if(!target)return json(res,404,{error:'Usuário não encontrado.'});if(target.id===account.id)return json(res,400,{error:'Use a opção de segurança da própria conta para trocar sua senha.'});const input=await body(req);if(typeof input.password!=='string'||input.password.length<8||input.password.length>128)return json(res,400,{error:'A nova senha deve ter entre 8 e 128 caracteres.'});Object.assign(target,hash(input.password));await saveUsers(users);for(const [sessionId,userId] of sessions)if(userId===target.id)sessions.delete(sessionId);await audit(account,'Senha de usuário redefinida',{name:target.name,username:target.username});return json(res,200,{ok:true});
+        if(account.role!=='desenvolvedor')return json(res,403,{error:'Somente Desenvolvedor pode redefinir senhas de outras contas.'});const target=users.find(u=>u.id===decodeURIComponent(passwordMatch[1]));if(!target)return json(res,404,{error:'Usuário não encontrado.'});if(target.id===account.id)return json(res,400,{error:'Use a opção de segurança da própria conta para trocar sua senha.'});const input=await body(req);if(typeof input.password!=='string'||input.password.length<8||input.password.length>128)return json(res,400,{error:'A nova senha deve ter entre 8 e 128 caracteres.'});Object.assign(target,hash(input.password));await saveUsers(users);await deleteUserSessions(target.id);await audit(account,'Senha de usuário redefinida',{name:target.name,username:target.username});return json(res,200,{ok:true});
       }
       if (req.method === 'GET' && url.pathname === '/api/recruitments') {
         const items = await readData('recruitments');
@@ -296,4 +321,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 const port = Number(process.env.PORT || 4173);
-server.listen(port, '127.0.0.1', () => console.log(`Painel disponível em http://localhost:${port}`));
+const host = process.env.HOST || '127.0.0.1';
+server.listen(port, host, () => console.log(`Painel ouvindo em ${host}:${port}`));
+process.once('SIGTERM',()=>server.close(async()=>{await pool?.end();process.exit(0)}));
