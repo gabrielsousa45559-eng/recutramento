@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(root, 'data');
 const usersFile = path.join(dataDir, 'users.json');
-const dataFiles = { recruitments:'recruitments.json', goals:'goals.json', events:'events.json', settings:'settings.json' };
+const dataFiles = { recruitments:'recruitments.json', goals:'goals.json', events:'events.json', settings:'settings.json', blacklist:'blacklist.json', audit:'audit.json' };
 const sessions = new Map();
 const mime = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.svg':'image/svg+xml' };
 await mkdir(dataDir, { recursive: true });
@@ -18,8 +18,16 @@ const readUsers = async () => JSON.parse(await readFile(usersFile, 'utf8'));
 const saveUsers = async users => writeFile(usersFile, JSON.stringify(users, null, 2));
 const readData = async name => JSON.parse(await readFile(path.join(dataDir, dataFiles[name]), 'utf8'));
 const saveData = async (name, data) => writeFile(path.join(dataDir, dataFiles[name]), JSON.stringify(data, null, 2));
+async function audit(actor, action, details={}) { const logs=await readData('audit'); logs.unshift({id:randomBytes(12).toString('hex'),actor:actor.name,actorId:actor.id,role:actor.role,action,details,timestamp:new Date().toISOString()}); await saveData('audit',logs); }
 const nameKey = name => (name || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
 const usernameFromName = name => nameKey(name).replace(/[^a-z0-9_.-]/g, '');
+const norm = value => (value || '').toString().trim().toLocaleLowerCase('pt-BR').replace(/\s/g,'');
+const managed = role => ['gestão','administração','desenvolvedor'].includes(role);
+const admins = role => ['administração','desenvolvedor'].includes(role);
+const taskNames = ['Set in-game','Cargos Discord','Aula de regras e conduta','Kit inicial / Rádio'];
+const positiveKinds = ['Participou de ação','Cumpriu metas','Demonstrou atividade','Ajudou a equipe'];
+const negativeKinds = ['Faltou chamada','Quebrou regras','Apresentou inatividade','Problemas de conduta'];
+const findBlacklistMatch = (candidate, entries) => entries.find(b=>(b.passport&&norm(b.passport)===norm(candidate.passport))||(b.discord&&candidate.discord&&norm(b.discord)===norm(candidate.discord)))||null;
 const hash = (password, salt = randomBytes(16).toString('hex')) => ({ salt, hash: scryptSync(password, salt, 64).toString('hex') });
 const verify = (password, account) => timingSafeEqual(Buffer.from(hash(password, account.salt).hash, 'hex'), Buffer.from(account.hash, 'hex'));
 const cookie = req => Object.fromEntries((req.headers.cookie || '').split(';').map(x => x.trim().split('=').map(decodeURIComponent))).sid;
@@ -62,60 +70,164 @@ const server = http.createServer(async (req, res) => {
         if (account.role !== 'desenvolvedor' && account.role !== 'administração') return json(res, 403, { error:'Sem permissão.' });
         return json(res, 200, { users: users.map(clean) });
       }
+      if(req.method==='GET'&&url.pathname==='/api/staff'){
+        if(!managed(account.role))return json(res,403,{error:'Sem permissão.'});return json(res,200,{users:users.map(u=>({id:u.id,name:u.name,role:u.role}))});
+      }
       if (req.method === 'POST' && url.pathname === '/api/users') {
         if (account.role !== 'desenvolvedor' && account.role !== 'administração') return json(res, 403, { error:'Sem permissão.' });
-        const input = await body(req); const username = usernameFromName(input.name);
-        if (username.length < 3 || username.length > 32 || (input.password || '').length < 8 || !(input.name || '').trim() || !['membro','gestão','administração'].includes(input.role)) return json(res, 400, { error:'Confira nome, nível e senha (mínimo 8 caracteres).' });
+        const input = await body(req); const username = usernameFromName(input.name); const allowedRoles = account.role === 'desenvolvedor' ? ['membro','gestão','administração','desenvolvedor'] : ['membro','gestão','administração'];
+        if (username.length < 3 || username.length > 32 || (input.password || '').length < 8 || !(input.name || '').trim() || !allowedRoles.includes(input.role)) return json(res, 400, { error:'Confira nome, nível e senha (mínimo 8 caracteres).' });
         if (users.some(u => nameKey(u.name) === nameKey(input.name))) return json(res, 409, { error:'Já existe uma pessoa com esse nome.' });
         if (users.some(u => u.username.toLowerCase() === username.toLowerCase())) return json(res, 409, { error:'Esse usuário já existe.' });
         const user = { id:randomBytes(12).toString('hex'), name:input.name.trim(), username, role:input.role, createdAt:new Date().toISOString(), ...hash(input.password) };
-        users.push(user); await saveUsers(users); return json(res, 201, { user:clean(user) });
+        users.push(user); await saveUsers(users); await audit(account,'Usuário criado',{name:user.name,role:user.role}); return json(res, 201, { user:clean(user) });
+      }
+      const roleMatch=url.pathname.match(/^\/api\/users\/([^/]+)\/role$/);
+      if(req.method==='PATCH'&&roleMatch){
+        if(!admins(account.role))return json(res,403,{error:'Somente Administração e Desenvolvedor podem alterar cargos.'});const input=await body(req),target=users.find(u=>u.id===decodeURIComponent(roleMatch[1]));if(!target)return json(res,404,{error:'Usuário não encontrado.'});
+        const allowed=account.role==='desenvolvedor'?['membro','gestão','administração','desenvolvedor']:['membro','gestão','administração'];if(!allowed.includes(input.role))return json(res,400,{error:'Cargo inválido.'});if(target.role==='desenvolvedor'&&input.role!=='desenvolvedor')return json(res,403,{error:'A conta master de Desenvolvedor não pode ser rebaixada.'});if(target.role==='desenvolvedor'&&account.role!=='desenvolvedor')return json(res,403,{error:'Somente Desenvolvedor pode alterar o acesso de outro Desenvolvedor.'});
+        const previous=target.role;target.role=input.role;await saveUsers(users);await audit(account,'Cargo de usuário alterado',{name:target.name,from:previous,to:target.role});return json(res,200,{user:clean(target)});
       }
       if (req.method === 'GET' && url.pathname === '/api/recruitments') {
         const items = await readData('recruitments');
-        return json(res, 200, { items:account.role === 'membro' ? items.filter(x => x.creatorId === account.id) : items });
+        const blacklist=await readData('blacklist'); let changed=false; const now=Date.now();
+        for(const item of items){
+          const match=blacklist.find(b=>(b.passport && norm(b.passport)===norm(item.passport))||(b.discord && item.discord && norm(b.discord)===norm(item.discord)))||null;item.blacklistMatch=match?(account.role==='membro'?{id:match.id,matched:true}:match):null;
+          if(item.status==='Aguardando Setagem' && now>(item.triageDeadline?Date.parse(item.triageDeadline):Date.parse(item.createdAt)+12*60*60*1000) && !item.delayLoggedAt){item.delayLoggedAt=new Date().toISOString();item.history||=[];item.history.push({action:'Prazo de triagem excedido',actor:'Sistema',timestamp:item.delayLoggedAt,details:{deadline:item.triageDeadline}});await audit({name:'Sistema',id:'system',role:'sistema'},'Atraso de triagem',{candidate:item.candidateName,id:item.id});changed=true;}
+          if(item.status==='Recruta em Avaliação' && item.probationEnd && now>=Date.parse(item.probationEnd)){item.status='Aguardando efetivação';item.history||=[];item.history.push({action:'Período probatório concluído',actor:'Sistema',timestamp:new Date().toISOString()});await audit({name:'Sistema',id:'system',role:'sistema'},'Período probatório concluído',{candidate:item.candidateName,id:item.id});changed=true;}
+        }
+        if(changed)await saveData('recruitments',items);
+        let visible=items;if(account.role==='membro')visible=items.filter(x=>x.creatorId===account.id);else if(account.role==='gestão')visible=items.filter(x=>x.createdAt.slice(0,10)===new Date().toISOString().slice(0,10));
+        return json(res, 200, { items:visible });
       }
       if (req.method === 'POST' && url.pathname === '/api/recruitments') {
         const input = await body(req);
         if (!(input.candidateName || '').trim() || !(input.passport || '').trim()) return json(res, 400, { error:'Informe nome e passaporte/ID.' });
         const items = await readData('recruitments');
-        const item = { id:randomBytes(12).toString('hex'), candidateName:input.candidateName.trim(), passport:input.passport.trim(), discord:(input.discord || '').trim(), phone:(input.phone || '').trim(), playTime:(input.playTime || '').trim(), referredBy:(input.referredBy || '').trim(), observations:(input.observations || '').trim(), interview:input.interview || {}, status:'Em análise', creatorId:account.id, recruiter:account.name, createdAt:new Date().toISOString() };
-        items.unshift(item); await saveData('recruitments', items); return json(res, 201, { item });
+        const passport=norm(input.passport), discord=norm(input.discord); if(items.some(x=>norm(x.passport)===passport||(discord&&x.discord&&norm(x.discord)===discord)))return json(res,409,{error:'Já existe um recrutamento com esse passaporte ou Discord.'});
+        const now=new Date(); const item = { id:randomBytes(12).toString('hex'), candidateName:input.candidateName.trim(), passport:input.passport.trim(), discord:(input.discord || '').trim(), phone:(input.phone || '').trim(), playTime:(input.playTime || '').trim(), referredBy:(input.referredBy || '').trim(), observations:(input.observations || '').trim(), interview:input.interview || {}, status:'Aguardando Setagem', triageDeadline:new Date(now.getTime()+12*60*60*1000).toISOString(), onboarding:[], occurrences:[], evaluations:[], history:[{action:'Recrutamento criado',actor:account.name,timestamp:now.toISOString()}], creatorId:account.id, recruiter:account.name,recruiterRole:account.role, createdAt:now.toISOString() };
+        items.unshift(item); await saveData('recruitments', items); await audit(account,'Novo recrutamento',{candidate:item.candidateName,passport:item.passport}); return json(res, 201, { item });
       }
       const statusMatch = url.pathname.match(/^\/api\/recruitments\/([^/]+)\/status$/);
       if (req.method === 'PATCH' && statusMatch) {
         if (account.role === 'membro') return json(res, 403, { error:'Somente Gestão e Administração podem alterar status.' });
-        const { status } = await body(req); const statuses = ['Em análise','Entrevista agendada','Aguardando setagem','Setado / Em instrução','Recruta em avaliação','Aguardando efetivação','Aprovado / Efetivado','Reprovado','Desligado'];
+        const { status } = await body(req); const statuses = ['Em análise','Entrevista agendada','Aguardando Setagem','Setado / Em Instrução','Recruta em Avaliação'];
         if (!statuses.includes(status)) return json(res, 400, { error:'Status inválido.' });
         const items = await readData('recruitments'); const item = items.find(x => x.id === decodeURIComponent(statusMatch[1]));
         if (!item) return json(res, 404, { error:'Candidato não encontrado.' });
-        item.status = status; item.updatedAt = new Date().toISOString(); item.updatedBy = account.name; await saveData('recruitments', items); return json(res, 200, { item });
+        const match=findBlacklistMatch(item,await readData('blacklist'));item.blacklistMatch=match;
+        const transitions={'Em análise':['Entrevista agendada','Aguardando Setagem'],'Entrevista agendada':['Em análise','Aguardando Setagem'],'Aguardando Setagem':['Setado / Em Instrução'],'Setado / Em Instrução':['Recruta em Avaliação']};
+        if(item.status!==status&&!(transitions[item.status]||[]).includes(status))return json(res,409,{error:'Esta transição não é permitida. Siga as etapas de treinamento na ordem.'});
+        if(status==='Aguardando Setagem'&&match&&!item.blacklistOverride)return json(res,409,{error:'Candidato consta na blacklist. Solicite análise da Administração antes de avançar.'});
+        if(status==='Recruta em Avaliação')return json(res,409,{error:'O período probatório começa ao salvar as quatro tarefas de onboarding concluídas.'});
+        item.status = status; item.updatedAt = new Date().toISOString(); item.updatedBy = account.name; item.history||=[];item.history.push({action:`Status alterado para ${status}`,actor:account.name,timestamp:item.updatedAt}); await saveData('recruitments', items); await audit(account,'Alteração de status',{candidate:item.candidateName,status}); return json(res, 200, { item });
       }
-      if (req.method === 'GET' && url.pathname === '/api/goals') return json(res, 200, { items:await readData('goals') });
+      const onboardingMatch=url.pathname.match(/^\/api\/recruitments\/([^/]+)\/onboarding$/);
+      if(req.method==='PATCH'&&onboardingMatch){
+        if(!managed(account.role))return json(res,403,{error:'Apenas Gestão, Administração e Desenvolvedor podem gerenciar onboarding.'});
+        const input=await body(req),items=await readData('recruitments'),item=items.find(x=>x.id===decodeURIComponent(onboardingMatch[1]));if(!item)return json(res,404,{error:'Candidato não encontrado.'});
+        if(item.status!=='Setado / Em Instrução')return json(res,409,{error:'O candidato precisa estar na etapa Setado / Em Instrução.'});
+        const tasks=input.tasks;if(!Array.isArray(tasks)||tasks.length!==4||tasks.some((t,i)=>t.name!==taskNames[i]||!['Pendente','Concluído'].includes(t.status)))return json(res,400,{error:'Envie as quatro tarefas obrigatórias do onboarding.'});
+        const done=tasks.filter(t=>t.status==='Concluído');if(tasks.some(t=>t.status==='Concluído'&&(!t.responsible||!t.completedAt)))return json(res,400,{error:'Cada tarefa concluída precisa de responsável e data.'});
+        const signers=done.map(t=>users.find(u=>nameKey(u.name)===nameKey(t.responsible)));if(signers.some(x=>!x))return json(res,400,{error:'O responsável deve ser um usuário cadastrado no painel.'});
+        if(new Set(signers.map(x=>x.id)).size!==done.length)return json(res,409,{error:'Cada tarefa deve ser assinada por um responsável diferente.'});
+        item.onboarding=tasks.map(t=>({...t,responsible:(t.responsible||'').trim(),notes:(t.notes||'').trim()}));item.history||=[];item.history.push({action:'Checklist de onboarding atualizado',actor:account.name,timestamp:new Date().toISOString()});
+        if(tasks.every(t=>t.status==='Concluído')){const start=new Date();item.status='Recruta em Avaliação';item.probationStart=start.toISOString();item.probationEnd=new Date(start.getTime()+7*86400000).toISOString();item.history.push({action:'Período probatório iniciado (7 dias)',actor:account.name,timestamp:start.toISOString()});}
+        await saveData('recruitments',items);await audit(account,'Onboarding atualizado',{candidate:item.candidateName,completed:done.length});return json(res,200,{item});
+      }
+      const occurrenceMatch=url.pathname.match(/^\/api\/recruitments\/([^/]+)\/occurrences$/);
+      if(req.method==='POST'&&occurrenceMatch){
+        if(!managed(account.role))return json(res,403,{error:'Sem permissão para registrar ocorrências.'});
+        const input=await body(req),items=await readData('recruitments'),item=items.find(x=>x.id===decodeURIComponent(occurrenceMatch[1]));if(!item)return json(res,404,{error:'Candidato não encontrado.'});
+        const allowed=input.kind==='positive'?positiveKinds:input.kind==='negative'?negativeKinds:[];if(!allowed.includes(input.category))return json(res,400,{error:'Selecione uma ocorrência válida.'});
+        const row={id:randomBytes(12).toString('hex'),kind:input.kind,category:input.category,points:input.kind==='positive'?1:-1,notes:(input.notes||'').trim(),responsible:account.name,timestamp:new Date().toISOString()};item.occurrences||=[];item.occurrences.unshift(row);item.score=(item.score||0)+row.points;item.history||=[];item.history.push({action:`Ocorrência ${input.kind}: ${row.category}`,actor:account.name,timestamp:row.timestamp});
+        await saveData('recruitments',items);await audit(account,'Ocorrência registrada',{candidate:item.candidateName,kind:row.kind,category:row.category,points:row.points});return json(res,201,{item,occurrence:row});
+      }
+      const evaluationMatch=url.pathname.match(/^\/api\/recruitments\/([^/]+)\/evaluations$/);
+      if(req.method==='POST'&&evaluationMatch){
+        if(!managed(account.role))return json(res,403,{error:'Apenas Gestão e acima podem avaliar recrutas.'});
+        const criteria=['radio','rp','activity','discipline','teamwork','rules'],input=await body(req),scores=input.scores||{};if(criteria.some(k=>!Number.isInteger(Number(scores[k]))||Number(scores[k])<1||Number(scores[k])>5))return json(res,400,{error:'Dê uma nota de 1 a 5 para todos os seis critérios.'});
+        const items=await readData('recruitments'),item=items.find(x=>x.id===decodeURIComponent(evaluationMatch[1]));if(!item)return json(res,404,{error:'Candidato não encontrado.'});
+        const average=criteria.reduce((sum,k)=>sum+Number(scores[k]),0)/criteria.length;const ev={id:randomBytes(12).toString('hex'),scores:Object.fromEntries(criteria.map(k=>[k,Number(scores[k])])),average:Number(average.toFixed(2)),comments:(input.comments||'').trim(),evaluator:account.name,timestamp:new Date().toISOString()};item.evaluations||=[];item.evaluations.unshift(ev);item.history||=[];item.history.push({action:`Avaliação 360º registrada (média ${ev.average})`,actor:account.name,timestamp:ev.timestamp});await saveData('recruitments',items);await audit(account,'Avaliação 360º registrada',{candidate:item.candidateName,average:ev.average});return json(res,201,{evaluation:ev});
+      }
+      const verdictMatch=url.pathname.match(/^\/api\/recruitments\/([^/]+)\/verdict$/);
+      if(req.method==='POST'&&verdictMatch){
+        if(!admins(account.role))return json(res,403,{error:'Veredito final permitido à Administração e ao Desenvolvedor.'});
+        const input=await body(req),items=await readData('recruitments'),item=items.find(x=>x.id===decodeURIComponent(verdictMatch[1]));if(!item)return json(res,404,{error:'Candidato não encontrado.'});
+        if(item.status!=='Aguardando efetivação')return json(res,409,{error:'O veredito fica disponível após o período probatório.'});
+        if(!['efetivar','reprovar'].includes(input.decision))return json(res,400,{error:'Selecione efetivar ou reprovar.'});if(input.decision==='reprovar'&&!(input.reason||'').trim())return json(res,400,{error:'Informe o motivo da reprovação.'});
+        item.status=input.decision==='efetivar'?'Aprovado / Efetivado':'Reprovado';item.finalVerdict={decision:input.decision,reason:(input.reason||'').trim(),responsible:account.name,date:new Date().toISOString()};item.history||=[];item.history.push({action:`Veredito: ${item.status}`,actor:account.name,timestamp:item.finalVerdict.date,details:{reason:item.finalVerdict.reason}});await saveData('recruitments',items);await audit(account,'Veredito final registrado',{candidate:item.candidateName,status:item.status,reason:item.finalVerdict.reason});return json(res,200,{item});
+      }
+      const offboardMatch=url.pathname.match(/^\/api\/recruitments\/([^/]+)\/offboarding$/);
+      if(req.method==='POST'&&offboardMatch){
+        if(!admins(account.role))return json(res,403,{error:'Offboarding permitido à Administração e ao Desenvolvedor.'});
+        const input=await body(req),checks=['removedInGame','removedDiscord','itemsReturned','responsibilitiesTransferred'];if(checks.some(k=>input.checklist?.[k]!==true))return json(res,400,{error:'Conclua todos os itens do checklist de desligamento.'});if(!(input.reason||'').trim())return json(res,400,{error:'Informe o motivo do desligamento.'});
+        const items=await readData('recruitments'),item=items.find(x=>x.id===decodeURIComponent(offboardMatch[1]));if(!item)return json(res,404,{error:'Membro não encontrado.'});
+        item.offboarding={checklist:input.checklist,reason:input.reason.trim(),notes:(input.notes||'').trim(),responsible:account.name,date:new Date().toISOString()};item.status='Desligado';item.history||=[];item.history.push({action:'Desligamento registrado',actor:account.name,timestamp:item.offboarding.date,details:{reason:item.offboarding.reason}});await saveData('recruitments',items);await audit(account,'Desligamento registrado',{candidate:item.candidateName,reason:item.offboarding.reason});return json(res,200,{item});
+      }
+      const reviewMatch=url.pathname.match(/^\/api\/recruitments\/([^/]+)\/blacklist-review$/);
+      if(req.method==='POST'&&reviewMatch){
+        if(!admins(account.role))return json(res,403,{error:'Revisão de blacklist permitida à Administração e ao Desenvolvedor.'});const input=await body(req);if(!(input.reason||'').trim())return json(res,400,{error:'Registre o motivo da liberação.'});const items=await readData('recruitments'),item=items.find(x=>x.id===decodeURIComponent(reviewMatch[1]));if(!item)return json(res,404,{error:'Candidato não encontrado.'});item.blacklistOverride={approvedBy:account.name,approvedAt:new Date().toISOString(),reason:input.reason.trim()};item.history||=[];item.history.push({action:'Revisão de blacklist aprovada',actor:account.name,timestamp:item.blacklistOverride.approvedAt,details:{reason:item.blacklistOverride.reason}});await saveData('recruitments',items);await audit(account,'Revisão de blacklist aprovada',{candidate:item.candidateName,reason:item.blacklistOverride.reason});return json(res,200,{item});
+      }
+      if(req.method==='GET'&&url.pathname==='/api/blacklist'){
+        if(!managed(account.role))return json(res,403,{error:'Sem permissão para consultar a blacklist.'});return json(res,200,{items:await readData('blacklist')});
+      }
+      if(req.method==='POST'&&url.pathname==='/api/blacklist'){
+        if(!admins(account.role))return json(res,403,{error:'Somente Administração e Desenvolvedor podem alterar a blacklist.'});const input=await body(req);if(!(input.name||'').trim()||(!(input.passport||'').trim()&&!(input.discord||'').trim())||!(input.reason||'').trim())return json(res,400,{error:'Informe nome, passaporte ou Discord e o motivo.'});const items=await readData('blacklist');if(items.some(x=>(input.passport&&norm(x.passport)===norm(input.passport))||(input.discord&&norm(x.discord)===norm(input.discord))))return json(res,409,{error:'Esse passaporte ou Discord já consta na blacklist.'});const row={id:randomBytes(12).toString('hex'),name:input.name.trim(),passport:(input.passport||'').trim(),discord:(input.discord||'').trim(),reason:input.reason.trim(),notes:(input.notes||'').trim(),responsible:account.name,date:new Date().toISOString()};items.unshift(row);await saveData('blacklist',items);await audit(account,'Candidato adicionado à blacklist',{name:row.name,passport:row.passport,discord:row.discord,reason:row.reason});return json(res,201,{item:row});
+      }
+      const eventDecision=url.pathname.match(/^\/api\/events\/([^/]+)\/decision$/);
+      if(req.method==='PATCH'&&eventDecision){if(!admins(account.role))return json(res,403,{error:'Somente Administração pode decidir solicitações.'});const input=await body(req);if(!['Aguardando aprovação','Aprovado','Recusado','Publicado','Em andamento','Concluído','Cancelado'].includes(input.status))return json(res,400,{error:'Decisão inválida.'});const items=await readData('events'),event=items.find(x=>x.id===decodeURIComponent(eventDecision[1]));if(!event)return json(res,404,{error:'Evento não encontrado.'});event.status=input.status;event.decisionBy=account.name;event.decisionAt=new Date().toISOString();event.history||=[];event.history.push({status:event.status,actor:account.name,timestamp:event.decisionAt,notes:(input.notes||'').trim()});await saveData('events',items);await audit(account,'Decisão de evento',{event:event.name,status:event.status});return json(res,200,{event});}
+      if (req.method === 'GET' && url.pathname === '/api/goals') { const goals=await readData('goals');const today=new Date().toISOString().slice(0,10);const visible=account.role==='membro'?goals.filter(g=>(!g.validFrom||g.validFrom<=today)&&(!g.validUntil||g.validUntil>=today)&&(!g.roleTarget||g.roleTarget==='Todos'||g.roleTarget===account.role)&&(g.scope!=='Individual'||nameKey(g.assignee)===nameKey(account.name))):goals;return json(res,200,{items:visible}); }
       if (req.method === 'POST' && url.pathname === '/api/goals') {
         if (!['desenvolvedor','administração'].includes(account.role)) return json(res, 403, { error:'Somente Administração pode configurar metas.' });
-        const input = await body(req); if (!(input.name || '').trim() || Number(input.target) < 1) return json(res, 400, { error:'Informe a meta e um valor maior que zero.' });
-        const items = await readData('goals'); const item = { id:randomBytes(12).toString('hex'), name:input.name.trim(), target:Number(input.target), period:input.period || 'Diária', createdAt:new Date().toISOString(), createdBy:account.name };
-        items.unshift(item); await saveData('goals', items); return json(res, 201, { item });
+        const input = await body(req); if (!(input.name || '').trim() || Number(input.target) < 1 || !['Diária','Semanal','Mensal'].includes(input.period||'Diária') || !['Equipe','Grupo','Individual'].includes(input.scope||'Equipe') || !['Todos','membro','gestão','administração','desenvolvedor'].includes(input.roleTarget||'Todos') || (input.validFrom&&input.validUntil&&input.validFrom>input.validUntil)) return json(res, 400, { error:'Confira nome, quantidade, período, escopo e validade da meta.' });
+        if(input.scope==='Individual'&&!(input.assignee||'').trim())return json(res,400,{error:'Informe a pessoa para a meta individual.'});
+        const items = await readData('goals'); const item = { id:randomBytes(12).toString('hex'), name:input.name.trim(), target:Number(input.target), period:input.period || 'Diária',scope:input.scope||'Equipe',assignee:(input.assignee||'').trim(),roleTarget:input.roleTarget||'Todos',validFrom:input.validFrom||'',validUntil:input.validUntil||'',criteria:(input.criteria||'').trim(),createdAt:new Date().toISOString(), createdBy:account.name };
+        items.unshift(item); await saveData('goals', items); await audit(account,'Meta criada',{name:item.name,target:item.target,period:item.period}); return json(res, 201, { item });
       }
-      if (req.method === 'GET' && url.pathname === '/api/events') return json(res, 200, { items:await readData('events') });
+      const goalMatch=url.pathname.match(/^\/api\/goals\/([^/]+)$/);
+      if(req.method==='PATCH'&&goalMatch){
+        if(!admins(account.role))return json(res,403,{error:'Somente Administração pode alterar metas.'});const input=await body(req);if(!(input.name||'').trim()||Number(input.target)<1||!['Diária','Semanal','Mensal'].includes(input.period)||!['Equipe','Grupo','Individual'].includes(input.scope)||!['Todos','membro','gestão','administração','desenvolvedor'].includes(input.roleTarget)||input.validFrom&&input.validUntil&&input.validFrom>input.validUntil)return json(res,400,{error:'Confira os dados da meta.'});if(input.scope==='Individual'&&!(input.assignee||'').trim())return json(res,400,{error:'Informe o responsável pela meta individual.'});const goals=await readData('goals'),goal=goals.find(x=>x.id===decodeURIComponent(goalMatch[1]));if(!goal)return json(res,404,{error:'Meta não encontrada.'});Object.assign(goal,{name:input.name.trim(),target:Number(input.target),period:input.period,scope:input.scope,roleTarget:input.roleTarget,assignee:(input.assignee||'').trim(),validFrom:input.validFrom||'',validUntil:input.validUntil||'',criteria:(input.criteria||'').trim(),updatedAt:new Date().toISOString(),updatedBy:account.name});await saveData('goals',goals);await audit(account,'Meta alterada',{id:goal.id,name:goal.name,target:goal.target});return json(res,200,{goal});
+      }
+      if (req.method === 'GET' && url.pathname === '/api/events') { const events=await readData('events');const visible=account.role==='membro'?events.filter(x=>['Publicado','Aprovado','Em andamento','Concluído'].includes(x.status)):events;return json(res,200,{items:visible}); }
       if (req.method === 'POST' && url.pathname === '/api/events') {
         if (account.role === 'membro') return json(res, 403, { error:'Membros não podem criar eventos.' });
         const input = await body(req); if (!(input.name || '').trim() || !input.date) return json(res, 400, { error:'Informe o nome e a data do evento.' });
-        const items = await readData('events'); const item = { id:randomBytes(12).toString('hex'), name:input.name.trim(), description:(input.description || '').trim(), date:input.date, time:input.time || '', owner:input.owner || account.name, status:['desenvolvedor','administração'].includes(account.role) ? 'Publicado' : 'Aguardando aprovação', createdBy:account.name, createdAt:new Date().toISOString() };
-        items.unshift(item); await saveData('events', items); return json(res, 201, { item });
+        const items = await readData('events'); const item = { id:randomBytes(12).toString('hex'), name:input.name.trim(), description:(input.description || '').trim(), objective:(input.objective||'').trim(), team:(input.team||'').trim(), expectedParticipants:Number(input.expectedParticipants||0), notes:(input.notes||'').trim(), date:input.date, time:input.time || '', owner:input.owner || account.name, status:['desenvolvedor','administração'].includes(account.role) ? 'Publicado' : 'Aguardando aprovação', createdBy:account.name, createdAt:new Date().toISOString() };
+        items.unshift(item); await saveData('events', items); await audit(account,'Evento criado',{name:item.name,status:item.status,date:item.date}); return json(res, 201, { item });
       }
       if (req.method === 'GET' && url.pathname === '/api/performance') {
         let recruits = await readData('recruitments');
-        if (account.role === 'membro') recruits = recruits.filter(x => x.creatorId === account.id);
-        else if (account.role === 'gestão') { const day = new Date().toISOString().slice(0,10); recruits = recruits.filter(x => x.createdAt.slice(0,10) === day); }
+        const day = new Date().toISOString().slice(0,10),period=url.searchParams.get('period')||'daily';
+        if(period==='monthly'&&!admins(account.role))return json(res,403,{error:'O ranking mensal é restrito à Administração.'});
+        if(period==='monthly'){const month=day.slice(0,7);recruits=recruits.filter(x=>x.createdAt.slice(0,7)===month);}else recruits=recruits.filter(x=>x.createdAt.slice(0,10)===day);
         const rows = Object.values(recruits.reduce((all, x) => { const row = all[x.creatorId] ||= { recruiter:x.recruiter, total:0, approved:0 }; row.total++; if (x.status === 'Aprovado / Efetivado') row.approved++; return all; }, {})).sort((a,b) => b.total-a.total);
+        rows.splice(10);
         return json(res, 200, { rows, total:recruits.length });
       }
       if (req.method === 'GET' && url.pathname === '/api/settings') { const settings = await readData('settings'); return json(res, 200, { settings:settings[account.id] || { accent:'#a6f36b' } }); }
       if (req.method === 'POST' && url.pathname === '/api/settings') {
         const input = await body(req); if (!/^#[0-9a-fA-F]{6}$/.test(input.accent || '')) return json(res, 400, { error:'Escolha uma cor hexadecimal válida.' });
-        const settings = await readData('settings'); settings[account.id] = { accent:input.accent }; await saveData('settings', settings); return json(res, 200, { settings:settings[account.id] });
+        const settings = await readData('settings'); settings[account.id] = { accent:input.accent }; await saveData('settings', settings); await audit(account,'Preferência visual alterada',{accent:input.accent}); return json(res, 200, { settings:settings[account.id] });
+      }
+      if(req.method==='GET'&&url.pathname==='/api/dashboard'){
+        let recruits=await readData('recruitments');if(account.role==='membro')recruits=recruits.filter(x=>x.creatorId===account.id);
+        if(account.role==='gestão')recruits=recruits.filter(x=>x.createdAt.slice(0,10)===new Date().toISOString().slice(0,10));
+        const today=new Date().toISOString().slice(0,10),month=today.slice(0,7),all=account.role==='membro'||account.role==='gestão'?recruits:await readData('recruitments');
+        const daily=all.filter(x=>x.createdAt.slice(0,10)===today),monthly=all.filter(x=>x.createdAt.slice(0,7)===month),approved=all.filter(x=>x.status==='Aprovado / Efetivado'),rejected=all.filter(x=>x.status==='Reprovado');
+        const recent=Array.from({length:14},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(13-i));const key=d.toISOString().slice(0,10);return{date:key,count:all.filter(x=>x.createdAt.slice(0,10)===key).length};});
+        const effective=all.filter(x=>x.finalVerdict?.decision==='efetivar'),age=(item)=>Math.floor((Date.now()-Date.parse(item.finalVerdict.date))/86400000);
+        const retention=(days)=>{const eligible=effective.filter(x=>age(x)>=days);return{eligible:eligible.length,retained:eligible.filter(x=>x.status==='Aprovado / Efetivado').length,rate:eligible.length?Math.round(eligible.filter(x=>x.status==='Aprovado / Efetivado').length/eligible.length*100):0};};
+        let goals=await readData('goals');const goalDate=new Date().toISOString().slice(0,10);goals=goals.filter(g=>(!g.validFrom||g.validFrom<=goalDate)&&(!g.validUntil||g.validUntil>=goalDate));if(account.role==='membro')goals=goals.filter(g=>(!g.roleTarget||g.roleTarget==='Todos'||g.roleTarget===account.role)&&(g.scope!=='Individual'||nameKey(g.assignee)===nameKey(account.name)));
+        const events=await readData('events');const recruitsForGoal=all.filter(x=>x.createdAt.slice(0,10)===today).length;
+        const goalsHit=goals.filter(g=>{if(g.period!=='Diária')return false;const matched=daily.filter(x=>(!g.assignee||nameKey(x.recruiter)===nameKey(g.assignee))&&(!g.roleTarget||g.roleTarget==='Todos'||x.recruiterRole===g.roleTarget));return matched.length>=g.target;}).length;
+        const dailyRanking=Object.values(daily.reduce((a,x)=>{const row=a[x.creatorId]||={name:x.recruiter,total:0,approved:0};row.total++;if(x.status==='Aprovado / Efetivado')row.approved++;return a;},{})).sort((a,b)=>b.total-a.total).slice(0,10);
+        const hours=Array.from({length:24},(_,hour)=>({hour,count:all.filter(x=>new Date(x.createdAt).getHours()===hour).length}));
+        const overdue=all.filter(x=>x.status==='Aguardando Setagem'&&Date.now()>Date.parse(x.triageDeadline||0)).length;
+        return json(res,200,{total:all.length,today:daily.length,month:admins(account.role)?monthly.length:null,pending:all.filter(x=>!['Aprovado / Efetivado','Reprovado','Desligado'].includes(x.status)).length,approved:approved.length,rejected:rejected.length,probation:all.filter(x=>x.status==='Recruta em Avaliação').length,overdue,approvalRate:all.length?Math.round(approved.length/all.length*100):0,retention15:retention(15),retention30:retention(30),goalsHit,goalsTotal:goals.length,eventsCompleted:events.filter(x=>x.status==='Concluído').length,daily:recent,ranking:dailyRanking,hours});
+      }
+      if(req.method==='GET'&&url.pathname==='/api/logs'){
+        if(!managed(account.role))return json(res,403,{error:'Sem permissão para consultar auditoria.'});let logs=await readData('audit');if(account.role==='gestão'){const today=new Date().toISOString().slice(0,10);logs=logs.filter(x=>x.timestamp.slice(0,10)===today);}return json(res,200,{items:logs});
       }
       return json(res, 404, { error:'Rota não encontrada.' });
     }
