@@ -30,6 +30,8 @@ A página de avaliação 360º registra seis notas de 1 a 5, comentários e evol
 
 O formulário de recrutamento permite escolher uma das 14 pastas/equipes, registrar idade, disponibilidade e horas in-game e gerar um log copiável no formato de recrutamento. Cada usuário pode cadastrar seu ID do Discord em Personalização para aparecer como menção `<@ID>` nos logs.
 
+As abas **Comandos staff** e **Alinhamento** ficam visíveis para Gestão, Administração e Desenvolvedor. Comandos são modelos copiáveis, não executados pelo painel; Desenvolvedor pode manter a lista de modelos e publicar/editar/remover regras internas, visíveis para todos os usuários autenticados. A aba Alinhamento também abre as regras oficiais da cidade em uma nova aba.
+
 ## Publicar no GitHub
 
 No inicializador, clique **Publicar no GitHub**, ou execute `publicar-no-github.ps1`. O script prepara o repositório local e envia para o repositório configurado. Na primeira execução, ele pede o e-mail de autoria do GitHub. A autenticação de envio usa o Gerenciador de Credenciais do Git; senha do painel não é credencial GitHub.
