@@ -1,6 +1,6 @@
 # Painel de Recrutamento
 
-Aplicação inicial para gerenciamento de staff e recrutamento. Esta entrega estabelece o login, níveis de acesso, primeiro cadastro protegido de dois desenvolvedores e cadastro administrativo de usuários. Os demais módulos do briefing (recrutamentos completos, eventos, metas, ranking e auditoria) podem ser adicionados sobre esta base.
+Aplicação local para gerenciamento de staff e recrutamento. A sidebar tem telas funcionais para registrar recrutamentos, consultar candidatos e atualizar status conforme o nível de acesso, administrar metas e eventos, ver desempenho, gerenciar usuários e personalizar a cor do painel.
 
 ## Iniciar
 
@@ -8,7 +8,7 @@ Aplicação inicial para gerenciamento de staff e recrutamento. Esta entrega est
 - Terminal: execute `npm start` e abra `http://localhost:4173`.
 - Requer Node.js 20 ou superior; não requer instalar pacotes.
 
-No primeiro acesso, cadastre uma conta de desenvolvedor usando nome e senha. Depois, o login pede somente nome e senha. A senha é armazenada com salt e hash scrypt; não fica no código nem no Git.
+No primeiro acesso, cadastre uma conta de desenvolvedor usando nome e senha. Depois, o login pede somente nome e senha. A senha é armazenada com salt e hash scrypt; não fica no código nem no Git. Os dados operacionais ficam em arquivos JSON locais dentro de `data/`, ignorados pelo Git.
 
 ## Publicar no GitHub
 
