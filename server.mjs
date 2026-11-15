@@ -205,10 +205,10 @@ const server = http.createServer(async (req, res) => {
         rows.splice(10);
         return json(res, 200, { rows, total:recruits.length });
       }
-      if (req.method === 'GET' && url.pathname === '/api/settings') { const settings = await readData('settings'); return json(res, 200, { settings:settings[account.id] || { accent:'#a6f36b' } }); }
+      if (req.method === 'GET' && url.pathname === '/api/settings') { const settings = await readData('settings'); return json(res, 200, { settings:{accent:'#a6f36b',background:'#0b0d11',panel:'#12151b',text:'#f3f5f8',font:'DM Sans',...(settings[account.id]||{})} }); }
       if (req.method === 'POST' && url.pathname === '/api/settings') {
-        const input = await body(req); if (!/^#[0-9a-fA-F]{6}$/.test(input.accent || '')) return json(res, 400, { error:'Escolha uma cor hexadecimal válida.' });
-        const settings = await readData('settings'); settings[account.id] = { accent:input.accent }; await saveData('settings', settings); await audit(account,'Preferência visual alterada',{accent:input.accent}); return json(res, 200, { settings:settings[account.id] });
+        const input = await body(req),colors=['accent','background','panel','text']; if(colors.some(key=>!/^#[0-9a-fA-F]{6}$/.test(input[key]||''))||!['DM Sans','Manrope','Arial','system-ui'].includes(input.font)) return json(res, 400, { error:'Confira as cores e a fonte escolhida.' });
+        const settings = await readData('settings'); settings[account.id] = Object.fromEntries([...colors.map(key=>[key,input[key]]),['font',input.font]]); await saveData('settings', settings); await audit(account,'Preferências visuais alteradas',settings[account.id]); return json(res, 200, { settings:settings[account.id] });
       }
       if(req.method==='GET'&&url.pathname==='/api/dashboard'){
         let recruits=await readData('recruitments');if(account.role==='membro')recruits=recruits.filter(x=>x.creatorId===account.id);

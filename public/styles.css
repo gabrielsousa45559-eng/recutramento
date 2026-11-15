@@ -18,3 +18,14 @@ tr.overdue td{background:#421d23;color:#ffd2d2}
 .side{position:sticky;top:0;height:100vh;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#303640 transparent}
 .sidebottom{position:sticky;bottom:0;width:auto;margin-top:16px;background:#101318}
 @media(max-width:900px){.side{position:relative;height:auto;overflow:visible}.sidebottom{position:relative;bottom:auto;margin-top:8px}.side nav{display:flex;overflow:auto}}
+
+/* User selected the full interface palette and typeface. */
+body{font-family:var(--font-body,'DM Sans',sans-serif);background:radial-gradient(ellipse at 50% -25%,color-mix(in srgb,var(--accent) 12%,transparent),transparent 52%),var(--bg);color:var(--text)}
+.auth,.side,.card,.task-row{background-color:var(--panel)}
+.card{background:linear-gradient(145deg,color-mix(in srgb,var(--panel) 96%,white 4%),var(--panel))}
+.side{background:color-mix(in srgb,var(--panel) 82%,var(--bg));color:var(--text)}
+.auth h1,.top h1,.card h2,.statval,.brand b{font-family:var(--font-heading,'Manrope',sans-serif)}
+.sub,.muted,.navitem,.table td,.progressrow,.empty{color:color-mix(in srgb,var(--text) 72%,var(--muted))}
+.table th,.field label,.navlabel{color:color-mix(in srgb,var(--text) 62%,var(--muted))}
+.field input,.field select,.field textarea,.table select{color:var(--text)}
+.badge,.role{border-color:color-mix(in srgb,var(--accent) 35%,var(--line));}
