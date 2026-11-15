@@ -18,6 +18,7 @@ Há quatro cargos: **Membro**, **Gestão**, **Administração** e **Desenvolvedo
 - O Desenvolvedor pode abrir a matriz **Permissões dos cargos** e alterar, separadamente, quais páginas e ações cada cargo pode usar.
 - As permissões são verificadas no servidor e na interface. As mudanças valem para todos os usuários daquele cargo.
 - O acesso do Desenvolvedor à administração de permissões e usuários fica protegido contra bloqueio acidental.
+- Somente Desenvolvedor pode excluir outro login; a própria conta conectada e o último Desenvolvedor ficam protegidos. Os registros anteriores permanecem no histórico.
 - Só o Desenvolvedor pode redefinir a senha de outra conta. A senha nova deve ter pelo menos 8 caracteres; a alteração encerra as sessões da conta e gera um log sem registrar a senha.
 
 ## Recrutamento
@@ -28,7 +29,7 @@ O formulário permite escolher uma entre 14 equipes, registrar nome, passaporte,
 
 1. **Triagem e pré-set:** prazo de 12 horas, alerta de atraso e verificação de passaporte e Discord contra a blacklist.
 2. **Onboarding:** três tarefas obrigatórias — Set in-game, Cargos Discord e Aula de regras e conduta. Cada tarefa guarda status, responsável, data e observações. A mesma pessoa pode assinar mais de uma tarefa.
-3. **Período probatório:** começa automaticamente após o onboarding e dura 7 dias. Gestão registra ocorrências positivas e negativas no histórico.
+3. **Período probatório:** começa automaticamente após o onboarding e dura 7 dias. Gestão registra ocorrências positivas e negativas no histórico. Administração pode reprovar antes do fim; efetivação só fica disponível depois dos 7 dias.
 4. **Veredito:** após o prazo, um usuário autorizado efetiva ou reprova o recruta; reprovação exige motivo.
 
 A avaliação 360º guarda notas de 1 a 5 em seis critérios, comentários e evolução. O desligamento exige o checklist completo e preserva o histórico do membro.

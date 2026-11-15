@@ -106,7 +106,7 @@ const server = http.createServer(async (req, res) => {
       const canPermission=key=>effectivePermissions[key]===true;
       const canAccessCandidate=item=>canPermission('candidates.view_all')||canPermission('training.manage')||canPermission('evaluations.manage')||canPermission('offboarding.manage')||canPermission('candidates.decide')||canPermission('candidates.view_today')&&item.createdAt.slice(0,10)===new Date().toISOString().slice(0,10)||canPermission('candidates.view_own')&&item.creatorId===account.id;
       const route=url.pathname,method=req.method;let requiredPermission=null;
-      if(route==='/api/users')requiredPermission='users.manage';else if(/^\/api\/users\/[^/]+\/role$/.test(route))requiredPermission='users.manage';
+      if(route==='/api/users')requiredPermission='users.manage';else if(/^\/api\/users\/[^/]+\/(role|password)$/.test(route))requiredPermission='users.manage';else if(/^\/api\/users\/[^/]+$/.test(route)&&method==='DELETE')requiredPermission='users.manage';
       else if(route==='/api/staff')requiredPermission='training.manage';
       else if(route==='/api/staff-commands')requiredPermission=method==='GET'?'staff_commands.view':'staff_commands.manage';else if(/^\/api\/staff-commands\/[^/]+$/.test(route))requiredPermission='staff_commands.manage';
       else if(route==='/api/internal-rules')requiredPermission=method==='GET'?'page.alignment':'alignment.manage_rules';else if(/^\/api\/internal-rules\/[^/]+$/.test(route))requiredPermission='alignment.manage_rules';
@@ -171,6 +171,8 @@ const server = http.createServer(async (req, res) => {
       if(req.method==='PATCH'&&passwordMatch){
         if(account.role!=='desenvolvedor')return json(res,403,{error:'Somente Desenvolvedor pode redefinir senhas de outras contas.'});const target=users.find(u=>u.id===decodeURIComponent(passwordMatch[1]));if(!target)return json(res,404,{error:'Usuário não encontrado.'});if(target.id===account.id)return json(res,400,{error:'Use a opção de segurança da própria conta para trocar sua senha.'});const input=await body(req);if(typeof input.password!=='string'||input.password.length<8||input.password.length>128)return json(res,400,{error:'A nova senha deve ter entre 8 e 128 caracteres.'});Object.assign(target,hash(input.password));await saveUsers(users);await deleteUserSessions(target.id);await audit(account,'Senha de usuário redefinida',{name:target.name,username:target.username});return json(res,200,{ok:true});
       }
+      const userMatch=url.pathname.match(/^\/api\/users\/([^/]+)$/);
+      if(req.method==='DELETE'&&userMatch){if(account.role!=='desenvolvedor')return json(res,403,{error:'Somente Desenvolvedor pode excluir contas.'});const id=decodeURIComponent(userMatch[1]),target=users.find(u=>u.id===id);if(!target)return json(res,404,{error:'Usuário não encontrado.'});if(target.id===account.id)return json(res,400,{error:'Você não pode excluir sua própria conta enquanto está conectado.'});if(target.role==='desenvolvedor'&&users.filter(u=>u.role==='desenvolvedor').length<=1)return json(res,409,{error:'Não é possível excluir o último Desenvolvedor.'});const next=users.filter(u=>u.id!==target.id);await saveUsers(next);await deleteUserSessions(target.id);await audit(account,'Conta de usuário excluída',{name:target.name,username:target.username,role:target.role});return json(res,200,{ok:true});}
       if (req.method === 'GET' && url.pathname === '/api/recruitments') {
         const items = await readData('recruitments');
         const blacklist=await readData('blacklist'); let changed=false; const now=Date.now();
@@ -236,8 +238,9 @@ const server = http.createServer(async (req, res) => {
       if(req.method==='POST'&&verdictMatch){
         if(!canPermission('candidates.decide'))return json(res,403,{error:'Seu cargo não pode registrar o veredito final.'});
         const input=await body(req),items=await readData('recruitments'),item=items.find(x=>x.id===decodeURIComponent(verdictMatch[1]));if(!item)return json(res,404,{error:'Candidato não encontrado.'});if(!canAccessCandidate(item))return json(res,403,{error:'Seu cargo não pode acessar este candidato.'});
-        if(item.status!=='Aguardando efetivação')return json(res,409,{error:'O veredito fica disponível após o período probatório.'});
+        if(!['Recruta em Avaliação','Aguardando efetivação'].includes(item.status))return json(res,409,{error:'O candidato não está em período probatório nem aguardando veredito.'});
         if(!['efetivar','reprovar'].includes(input.decision))return json(res,400,{error:'Selecione efetivar ou reprovar.'});if(input.decision==='reprovar'&&!(input.reason||'').trim())return json(res,400,{error:'Informe o motivo da reprovação.'});
+        if(input.decision==='efetivar'&&item.status!=='Aguardando efetivação')return json(res,409,{error:'A efetivação só pode ser registrada após o fim dos sete dias. A reprovação pode ser registrada a qualquer momento do probatório.'});
         item.status=input.decision==='efetivar'?'Aprovado / Efetivado':'Reprovado';item.finalVerdict={decision:input.decision,reason:(input.reason||'').trim(),responsible:account.name,date:new Date().toISOString()};item.history||=[];item.history.push({action:`Veredito: ${item.status}`,actor:account.name,timestamp:item.finalVerdict.date,details:{reason:item.finalVerdict.reason}});await saveData('recruitments',items);await audit(account,'Veredito final registrado',{candidate:item.candidateName,status:item.status,reason:item.finalVerdict.reason});return json(res,200,{item});
       }
       const offboardMatch=url.pathname.match(/^\/api\/recruitments\/([^/]+)\/offboarding$/);
