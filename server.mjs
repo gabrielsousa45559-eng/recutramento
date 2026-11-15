@@ -14,6 +14,8 @@ await mkdir(dataDir, { recursive: true });
 if (!existsSync(usersFile)) await writeFile(usersFile, '[]', { flag: 'wx' });
 const readUsers = async () => JSON.parse(await readFile(usersFile, 'utf8'));
 const saveUsers = async users => writeFile(usersFile, JSON.stringify(users, null, 2));
+const nameKey = name => (name || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+const usernameFromName = name => nameKey(name).replace(/[^a-z0-9_.-]/g, '');
 const hash = (password, salt = randomBytes(16).toString('hex')) => ({ salt, hash: scryptSync(password, salt, 64).toString('hex') });
 const verify = (password, account) => timingSafeEqual(Buffer.from(hash(password, account.salt).hash, 'hex'), Buffer.from(account.hash, 'hex'));
 const cookie = req => Object.fromEntries((req.headers.cookie || '').split(';').map(x => x.trim().split('=').map(decodeURIComponent))).sid;
@@ -33,16 +35,17 @@ const server = http.createServer(async (req, res) => {
         if (!Array.isArray(input.developers) || input.developers.length !== 2) return json(res, 400, { error: 'Cadastre exatamente os dois desenvolvedores.' });
         const names = new Set();
         for (const d of input.developers) {
-          if (!/^[\p{L}\p{N}_.-]{3,32}$/u.test(d.username || '') || (d.password || '').length < 10 || !(d.name || '').trim()) return json(res, 400, { error: 'Informe nome, usuário válido e senha com pelo menos 10 caracteres.' });
-          if (names.has(d.username.toLowerCase())) return json(res, 400, { error: 'Os nomes de usuário devem ser diferentes.' });
-          names.add(d.username.toLowerCase());
+          const key = nameKey(d.name);
+          if (!key || usernameFromName(d.name).length < 3 || (d.password || '').length < 8) return json(res, 400, { error: 'Informe um nome válido e uma senha com pelo menos 8 caracteres.' });
+          if (names.has(key)) return json(res, 400, { error: 'Os nomes devem ser diferentes.' });
+          names.add(key);
         }
-        const created = input.developers.map(d => ({ id: randomBytes(12).toString('hex'), name: d.name.trim(), username: d.username.trim(), role: 'desenvolvedor', createdAt: new Date().toISOString(), ...hash(d.password) }));
+        const created = input.developers.map(d => ({ id: randomBytes(12).toString('hex'), name: d.name.trim(), username: usernameFromName(d.name), role: 'desenvolvedor', createdAt: new Date().toISOString(), ...hash(d.password) }));
         await saveUsers(created);
         return json(res, 201, { ok: true });
       }
       if (req.method === 'POST' && url.pathname === '/api/login') {
-        const input = await body(req); const account = users.find(u => u.username.toLowerCase() === (input.username || '').trim().toLowerCase());
+        const input = await body(req); const account = users.find(u => nameKey(u.name) === nameKey(input.name));
         if (!account || !verify(input.password || '', account)) return json(res, 401, { error: 'Usuário ou senha incorretos.' });
         const sid = randomBytes(32).toString('hex'); sessions.set(sid, account.id);
         return json(res, 200, { user: clean(account) }, { 'Set-Cookie':`sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800` });
@@ -58,7 +61,8 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && url.pathname === '/api/users') {
         if (account.role !== 'desenvolvedor' && account.role !== 'administração') return json(res, 403, { error:'Sem permissão.' });
         const input = await body(req); const username = (input.username || '').trim();
-        if (!/^[\p{L}\p{N}_.-]{3,32}$/u.test(username) || (input.password || '').length < 10 || !(input.name || '').trim() || !['membro','gestão','administração'].includes(input.role)) return json(res, 400, { error:'Confira nome, usuário, nível e senha (mínimo 10 caracteres).' });
+        if (!/^[\p{L}\p{N}_.-]{3,32}$/u.test(username) || (input.password || '').length < 8 || !(input.name || '').trim() || !['membro','gestão','administração'].includes(input.role)) return json(res, 400, { error:'Confira nome, usuário, nível e senha (mínimo 8 caracteres).' });
+        if (users.some(u => nameKey(u.name) === nameKey(input.name))) return json(res, 409, { error:'Já existe uma pessoa com esse nome.' });
         if (users.some(u => u.username.toLowerCase() === username.toLowerCase())) return json(res, 409, { error:'Esse usuário já existe.' });
         const user = { id:randomBytes(12).toString('hex'), name:input.name.trim(), username, role:input.role, createdAt:new Date().toISOString(), ...hash(input.password) };
         users.push(user); await saveUsers(users); return json(res, 201, { user:clean(user) });
