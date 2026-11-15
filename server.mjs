@@ -32,7 +32,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && url.pathname === '/api/setup') {
         if (users.length) return json(res, 409, { error: 'A configuração inicial já foi concluída.' });
         const input = await body(req);
-        if (!Array.isArray(input.developers) || input.developers.length !== 2) return json(res, 400, { error: 'Cadastre exatamente os dois desenvolvedores.' });
+        if (!Array.isArray(input.developers) || input.developers.length !== 1) return json(res, 400, { error: 'Cadastre uma conta de desenvolvedor.' });
         const names = new Set();
         for (const d of input.developers) {
           const key = nameKey(d.name);

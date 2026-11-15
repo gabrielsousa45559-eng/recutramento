@@ -8,7 +8,7 @@ Aplicação inicial para gerenciamento de staff e recrutamento. Esta entrega est
 - Terminal: execute `npm start` e abra `http://localhost:4173`.
 - Requer Node.js 20 ou superior; não requer instalar pacotes.
 
-No primeiro acesso, cadastre o nome e a senha de cada desenvolvedor. Depois, o login pede somente nome e senha. As senhas são armazenadas com salt e hash scrypt; não ficam no código nem no Git.
+No primeiro acesso, cadastre uma conta de desenvolvedor usando nome e senha. Depois, o login pede somente nome e senha. A senha é armazenada com salt e hash scrypt; não fica no código nem no Git.
 
 ## Publicar no GitHub
 
