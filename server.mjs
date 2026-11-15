@@ -321,6 +321,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 const port = Number(process.env.PORT || 4173);
-const host = process.env.HOST || '127.0.0.1';
+// Render provides PORT; bind publicly even if HOST was not copied from the Blueprint.
+const host = process.env.HOST || (process.env.PORT ? '0.0.0.0' : '127.0.0.1');
 server.listen(port, host, () => console.log(`Painel ouvindo em ${host}:${port}`));
 process.once('SIGTERM',()=>server.close(async()=>{await pool?.end();process.exit(0)}));
